@@ -58,6 +58,7 @@ ul,ol{padding-left:20px;margin:6px 0}
 li{margin:6px 0}
 code{background:var(--acc2);padding:1px 5px;border-radius:4px;font-size:13px}
 .ex{background:var(--acc2);border-radius:8px;padding:10px;margin-top:10px}
+.honest{border:1px solid #e67e22;background:#e67e2218;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:14px}.honest details{margin-top:2px}.honest summary{font-size:13px;padding:2px 0}.honest ol{font-size:13px;color:var(--mut)}
 .src{font-size:12px;color:var(--mut);margin-top:10px}
 details{margin-top:12px}summary{cursor:pointer;color:var(--acc);font-size:14px;padding:6px 0}
 .chk{display:flex;align-items:center;gap:8px;color:var(--fg);font-size:inherit;margin-top:12px}.chk input{width:auto;min-height:0;transform:scale(1.3)}
@@ -86,8 +87,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 <script>
 // ---------- 데이터 ----------
 const KEY='otlog.v1';
-const DEF={settings:{wage:0,payday:25,payMonth:'same',shifts:{D:['07:00','15:00'],E:['15:00','23:00'],N:['23:00','07:00']},reasons:['인수인계','인증평가 준비','교육·회의','업무 마무리','기타'],autoReason:'인수인계',tourDone:false},records:[],pay:{},roster:{},imported:{}};
-const FIELD={date:'날짜',shift:'근무조',schedStart:'정규시작',schedEnd:'정규종료',actStart:'실제출근',actEnd:'실제퇴근',reason:'사유',basis:'지시근거',note:'메모',files:'첨부',handoverStart:'인계시작',otClaim:'시간외신청',otClaimNote:'신청메모',noBreak:'휴게미사용',peers:'동료',hospLogs:'병원기록'};
+const DEF={settings:{wage:0,payday:25,payMonth:'same',shifts:{D:['07:00','15:00'],E:['15:00','23:00'],N:['23:00','07:00']},reasons:['인수인계','인증평가 준비','교육·회의','업무 마무리','기타'],autoReason:'인수인계',autoOffset:10,tourDone:false},records:[],pay:{},roster:{},imported:{},sealed:{}};
+const FIELD={date:'날짜',shift:'근무조',schedStart:'정규시작',schedEnd:'정규종료',actStart:'실제출근',actEnd:'실제퇴근',reason:'사유',basis:'지시근거',note:'메모',files:'첨부',handoverStart:'인계시작',otClaim:'시간외신청',otClaimNote:'신청메모',noBreak:'휴게미사용',peers:'동료',hospLogs:'병원기록',changeMin:'환복분'};
 const SHIFT={D:'데이(D)',E:'이브닝(E)',N:'나이트(N)',OFF:'휴일(OFF)'};
 const SRC={live:'당일 기록',restored:'사후 복원',auto:'자동 기록'};
 const SRCB={live:'badge',restored:'badge org',auto:'badge auto'};
@@ -96,7 +97,7 @@ const OTC={'':'선택',none:'신청 안 함',applied:'신청함',rejected:'신�
 const HOSP=['출입카드','EMR 로그인','간호기록 작성시각','근무표','기타'];
 let S=load(), view=S.settings.tourDone?'home':'tour', formId=null, tourPage=0;
 
-function load(){try{const j=JSON.parse(localStorage.getItem(KEY));if(j)return{settings:{...DEF.settings,...j.settings},records:j.records||[],pay:j.pay||{},roster:j.roster||{},imported:j.imported||{}};}catch(e){}return JSON.parse(JSON.stringify(DEF));}
+function load(){try{const j=JSON.parse(localStorage.getItem(KEY));if(j)return{settings:{...DEF.settings,...j.settings},records:j.records||[],pay:j.pay||{},roster:j.roster||{},imported:j.imported||{},sealed:j.sealed||{}};}catch(e){}return JSON.parse(JSON.stringify(DEF));}
 function save(){localStorage.setItem(KEY,JSON.stringify(S));}
 
 // 첨부 파일은 IndexedDB (localStorage는 5MB 한계)
@@ -122,6 +123,24 @@ const wonF=n=>Math.round(n).toLocaleString('ko-KR')+'원';
 const ymLabel=ym=>ym.replace('-','년 ')+'월';
 const toDate=(d,t)=>{const [y,m,dd]=parts(d),[h,mi]=t.split(':').map(Number);return new Date(y,m-1,dd,h,mi);};
 const cyc=(a,b)=>{const d=Math.abs(a-b);return Math.min(d,1440-d);};
+const addMin=(t,d)=>{const m=((toMin(t)+d)%1440+1440)%1440;return pad(Math.floor(m/60))+':'+pad(m%60);};
+// 정직 기록 원칙 (20B)
+const HONEST_SHORT='실제보다 늘려 적지 마세요. 애매하면 짧게 적는 쪽이 이깁니다.';
+const HONEST_LINE='이 기록은 실제보다 늘리지 않는 원칙으로 작성했습니다. 위치 자동 시각은 이동 시간을 빼고 계산했습니다.';
+const honestBox=()=>`<div class=honest><b>${HONEST_SHORT}</b><details><summary>자세히 보기</summary><ol>
+<li><b>병원도 기록을 갖고 있습니다.</b> 출입카드, EMR 로그인·로그아웃, 간호기록 작성 시각. 청구하면 노동청이나 법원이 병원에 이 기록을 내라고 할 수 있고, 내 기록과 나란히 놓고 비교합니다.</li>
+<li><b>증명은 내가 해야 합니다.</b> 병원은 내가 몇 시에 나갔는지 증명하지 않아도 됩니다. "이 기록은 믿기 어렵다"는 것만 보여주면 됩니다.</li>
+<li><b>하나가 어긋나면 전부 의심받습니다.</b> 병원 기록보다 내게 유리하게 적은 날이 하나라도 드러나면, 그날만이 아니라 3년 치 전체를 믿지 않을 수 있습니다.</li>
+<li>일부러 꾸민 기록으로 돈을 청구하면 형사 문제(소송사기)가 될 수 있습니다.</li>
+<li><b>그래서 이렇게 적습니다.</b> 모르면 빈칸. 기억이 애매하면 짧은 쪽. 추정한 값은 "추정" 표시. 고친 기록은 수정 이력이 남는데, 정직하게 고친 이력은 오히려 믿음을 줍니다.</li>
+<li>위치 자동 시각에는 병원까지 걷는 시간이 들어 있어 실제 일한 시간보다 깁니다. 그래서 앱은 설정한 이동 시간만큼 빼고 계산합니다.</li></ol></details></div>`;
+// 봉인 코드: 기록을 생성 순으로 SHA-256 연쇄 해시. 나에게 보낸 메일의 서버 시각이 그 이전 기록 전체를 고정한다.
+async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');}
+const canon=r=>JSON.stringify({id:r.id,date:r.date,shift:r.shift,schedStart:r.schedStart,schedEnd:r.schedEnd,actStart:r.actStart,actEnd:r.actEnd,locStart:r.locStart,locEnd:r.locEnd,offsetMin:r.offsetMin,changeMin:r.changeMin,reason:r.reason,basis:r.basis,note:r.note,source:r.source,createdAt:r.createdAt,stampStart:r.stampStart,stampEnd:r.stampEnd,srvStart:r.srvStart,srvEnd:r.srvEnd,history:r.history,rawLines:r.rawLines,files:(r.files||[]).map(f=>f.name),handoverStart:r.handoverStart,otClaim:r.otClaim,otClaimNote:r.otClaimNote,noBreak:r.noBreak,peers:r.peers,hospLogs:r.hospLogs});
+async function seal(upTo){let h='';const rs=[...S.records].filter(r=>!upTo||r.date<=upTo).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));for(const r of rs)h=await sha(h+'|'+canon(r));return h?h.slice(0,12):'-';}
+// 서버 시각: 폰 시계 조작 의심을 막기 위해 저장 때 HEAD 응답의 Date 헤더를 함께 남긴다 (오프라인이면 없음)
+async function serverNow(){try{const r=await fetch(location.pathname,{method:'HEAD',cache:'no-store'});const d=r.headers.get('Date');return d?new Date(d).toISOString():'';}catch(e){return'';}}
+const clockDiff=(local,srv)=>srv?Math.round((new Date(local)-new Date(srv))/1000):0;
 
 // ---------- 계산 ----------
 // 초과 = 정규 시작 전(조기) + 정규 종료 후(연장). 휴일(OFF)은 전체가 초과. 야간 = 초과 중 22~06시 겹침.
@@ -157,8 +176,8 @@ function checkText(r){if(!r.actStart)return '출근 시각 없음';if(!r.actEnd)
 // ---------- 기록 조작 (덮어쓰기 금지: 바꾸면 이력에 남김) ----------
 function logChange(r,field,from,to){if((from||'')===(to||''))return;(r.history=r.history||[]).push({at:new Date().toISOString(),field,from:from||'',to:to||''});}
 function newRecord(date,shift,source){const sh=S.settings.shifts[shift]||['',''];const r={id:uid(),date,shift,schedStart:shift==='OFF'?'':sh[0],schedEnd:shift==='OFF'?'':sh[1],actStart:'',actEnd:'',reason:'',basis:'',note:'',files:[],source,createdAt:new Date().toISOString(),history:[]};S.records.push(r);return r;}
-function clockIn(shift){const r=newRecord(todayStr(),shift,'live');r.actStart=nowHM();r.stampStart=new Date().toISOString();save();render();}
-function clockOut(id){const r=rec(id);r.actEnd=nowHM();r.stampEnd=new Date().toISOString();save();render();}
+async function clockIn(shift){const r=newRecord(todayStr(),shift,'live');r.actStart=nowHM();r.stampStart=new Date().toISOString();save();render();r.srvStart=await serverNow();save();render();}
+async function clockOut(id){const r=rec(id);r.actEnd=nowHM();r.stampEnd=new Date().toISOString();save();render();r.srvEnd=await serverNow();save();render();}
 function setF(id,f,v){
   const r=rec(id);if((r[f]||'')===(v||''))return;
   const draft=!r.actStart&&!r.actEnd; // 시각을 아직 안 넣은 기록은 작성 중 → 수정 이력 안 남김
@@ -172,8 +191,12 @@ function toggleHosp(id,x){const r=rec(id);const a=(r.hospLogs||'').split(',').fi
 const hv=(f,v)=>f==='noBreak'?(v?'예':'아니오'):f==='otClaim'?(OTC[v]||v||''):(v||'');
 const extra=r=>[r.handoverStart&&'인계 시작 '+r.handoverStart,r.otClaim&&'시간외 신청: '+OTC[r.otClaim]+(r.otClaimNote?' ('+r.otClaimNote+')':''),r.noBreak&&'휴게·식사 못 씀',r.peers&&'동료 '+r.peers,r.hospLogs&&'병원 기록 있음: '+r.hospLogs].filter(Boolean).join(' / ');
 // 독립 타임스탬프: 기록 요약을 메일·카톡으로 나에게 보내 제3자 서버 시각을 남긴다
-function recText(r){const z=calc(r);return[`[근무시간 기록] ${r.date}(${dow(r.date)}) ${SHIFT[r.shift]} · ${SRC[r.source]}`,r.shift!=='OFF'?`정규 ${r.schedStart}–${r.schedEnd}`:'',`실제 ${r.actStart||'?'}–${r.actEnd||'?'}`+(z.ok?` → 초과 ${z.ot}분 (조기 ${z.early}·연장 ${z.late}·야간 ${z.night})`:''),r.reason&&`사유: ${r.reason}`,r.basis&&`지시 근거: ${r.basis}`,extra(r),r.note&&`메모: ${r.note}`,r.autoKeys&&`자동 기록 원본: ${r.autoKeys.join(', ')}`,`기록 생성 ${fmtISO(r.createdAt)}`+(r.stampStart?` / 출근탭 ${fmtISO(r.stampStart)}`:'')+(r.stampEnd?` / 퇴근탭 ${fmtISO(r.stampEnd)}`:''),(r.history||[]).length?'수정: '+hist(r):''].filter(Boolean).join('\n');}
-async function sendSelf(id){const t=recText(rec(id));if(navigator.share){try{await navigator.share({text:t});return;}catch(e){if(e.name==='AbortError')return;}}location.href='mailto:?subject='+encodeURIComponent(t.split('\n')[0])+'&body='+encodeURIComponent(t);}
+function recText(r){const z=calc(r);return[`[근무시간 기록] ${r.date}(${dow(r.date)}) ${SHIFT[r.shift]} · ${SRC[r.source]}`,r.shift!=='OFF'?`정규 ${r.schedStart}–${r.schedEnd}`:'',`실제 ${r.actStart||'?'}–${r.actEnd||'?'}`+(z.ok?` → 초과 ${z.ot}분 (조기 ${z.early}·연장 ${z.late}·야간 ${z.night})`:''),r.reason&&`사유: ${r.reason}`,r.basis&&`지시 근거: ${r.basis}`,extra(r),r.note&&`메모: ${r.note}`,r.source==='auto'&&`위치 도착 ${r.locStart||'?'} → 업무 시작 ${r.actStart||'?'} / 위치 출발 ${r.locEnd||'?'} → 업무 종료 ${r.actEnd||'?'} (이동 ${r.offsetMin||0}분 보정)`,r.rawLines&&`자동 기록 원본 줄: ${r.rawLines.join(' | ')}`,`앱 등록 ${fmtISO(r.createdAt)}`+(r.stampStart?` / 출근탭 ${fmtISO(r.stampStart)}`:'')+(r.srvStart?` (서버 ${fmtISO(r.srvStart)})`:'')+(r.stampEnd?` / 퇴근탭 ${fmtISO(r.stampEnd)}`:'')+(r.srvEnd?` (서버 ${fmtISO(r.srvEnd)})`:''),(r.history||[]).length?'수정: '+hist(r):''].filter(Boolean).join('\n');}
+async function shareText(t){if(navigator.share){try{await navigator.share({text:t});return true;}catch(e){return e.name!=='AbortError';}}location.href='mailto:?subject='+encodeURIComponent(t.split('\n')[0])+'&body='+encodeURIComponent(t);return true;}
+async function sendSelf(id){const code=await seal();shareText(recText(rec(id))+`\n봉인 코드(전체 기록) ${code}`);}
+async function sendSeal(ym){const upTo=ym?ym+'-31':null;const code=await seal(upTo);const n=S.records.filter(r=>!upTo||r.date<=upTo).length;const m=ym?monthly().find(x=>x.ym===ym):null;
+  const t=[`[근무시간 기록 봉인] ${ym?ymLabel(ym)+'까지':'전체'} · ${fmtISO(new Date().toISOString())}`,`기록 ${n}건`,m?`${ymLabel(ym)}: 초과 합계 ${fmtMin(m.ot)}, 야간 겹침 ${fmtMin(m.night)}, ${m.recs.length}건(자동 ${m.auto}·당일 ${m.live}·복원 ${m.rest})`:'',`봉인 코드 ${code}`,'이 코드는 위 범위의 기록을 생성 순으로 SHA-256 연쇄 해시한 값의 앞 12자입니다. 나중에 기록을 고치면 코드가 달라지므로, 이 메일의 서버 시각이 그 이전 기록 전체를 고정합니다.',HONEST_LINE].filter(Boolean).join('\n');
+  if(await shareText(t)){S.sealed[ym||'all']={code,at:new Date().toISOString()};save();render();}}
 function openNew(date,source){if(!date){const d=new Date();d.setDate(d.getDate()-1);date=todayStr(d);}const r=newRecord(date,rosterShift(date)||'D',source);save();openForm(r.id);}
 function openForm(id){formId=id;view='form';render();}
 async function delRec(id){const r=rec(id);if(!confirm(`${fmtDate(r.date)} ${SHIFT[r.shift]} 기록을 삭제할까요? 되돌릴 수 없습니다.`))return;for(const f of r.files||[])await files.del(f.id);S.records=S.records.filter(x=>x.id!==id);save();view='list';render();}
@@ -182,21 +205,23 @@ function setS(k,v){S.settings[k]=v;save();}
 function setShift(k,i,v){S.settings.shifts[k][i]=v;save();}
 
 // ---------- 자동 기록 가져오기 (단축어가 쓴 텍스트 파일: "2026-10-27 06:31 in") ----------
-function parseLog(text){const out=[];for(const line of text.split(/\r?\n/)){const m=line.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})[^\d]*(\d{1,2}):(\d{2})[^a-z가-힣]*(in|out|출근|퇴근|도착|출발)/i);if(!m)continue;const date=`${m[1]}-${pad(+m[2])}-${pad(+m[3])}`,time=`${pad(+m[4])}:${m[5]}`,k=/in|출근|도착/i.test(m[6])?'in':'out';out.push({date,time,k,key:`${date} ${time} ${k}`});}return out.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));}
+function parseLog(text){const out=[];for(const line of text.split(/\r?\n/)){const m=line.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})[^\d]*(\d{1,2}):(\d{2})[^a-z가-힣]*(in|out|출근|퇴근|도착|출발)/i);if(!m)continue;const date=`${m[1]}-${pad(+m[2])}-${pad(+m[3])}`,time=`${pad(+m[4])}:${m[5]}`,k=/in|출근|도착/i.test(m[6])?'in':'out';out.push({date,time,k,key:`${date} ${time} ${k}`,raw:line.trim()});}return out.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));}
 // 첫 도착부터 14시간 안의 도착은 같은 근무(점심 외출 등), 20시간 안의 마지막 출발이 퇴근
 function importEvents(ev){
   const res={added:0,updated:0,dup:0,orphan:0};const sessions=[];let cur=null;
   for(const e of ev){const t=toDate(e.date,e.time);
-    if(e.k==='in'){if(cur&&t-cur.t0<=14*36e5){cur.keys.push(e.key);continue;}cur={date:e.date,start:e.time,end:'',t0:t,keys:[e.key]};sessions.push(cur);}
-    else if(cur&&t>cur.t0&&t-cur.t0<=20*36e5){cur.end=e.time;cur.keys.push(e.key);}
-    else{let d=e.date;if(toMin(e.time)<720){const x=toDate(d,'00:00');x.setDate(x.getDate()-1);d=todayStr(x);}sessions.push({date:d,start:'',end:e.time,t0:t,keys:[e.key],orphan:true});cur=null;}
+    if(e.k==='in'){if(cur&&t-cur.t0<=14*36e5){cur.keys.push(e.key);cur.raws.push(e.raw);continue;}cur={date:e.date,start:e.time,end:'',t0:t,keys:[e.key],raws:[e.raw]};sessions.push(cur);}
+    else if(cur&&t>cur.t0&&t-cur.t0<=20*36e5){cur.end=e.time;cur.keys.push(e.key);cur.raws.push(e.raw);}
+    else{let d=e.date;if(toMin(e.time)<720){const x=toDate(d,'00:00');x.setDate(x.getDate()-1);d=todayStr(x);}sessions.push({date:d,start:'',end:e.time,t0:t,keys:[e.key],raws:[e.raw],orphan:true});cur=null;}
   }
   for(const s of sessions){
     const ex=S.records.find(r=>(r.autoKeys||[]).some(k=>s.keys.includes(k)));
-    if(ex){let ch=false;if(!ex.actEnd&&s.end){ex.actEnd=s.end;ch=true;}if(!ex.actStart&&s.start){ex.actStart=s.start;ch=true;}for(const k of s.keys){if(!ex.autoKeys.includes(k))ex.autoKeys.push(k);S.imported[k]=1;}if(ch){res.updated++;if(S.settings.autoReason&&!ex.reason&&calc(ex).ot>0)ex.reason=S.settings.autoReason;}else res.dup++;continue;}
+    if(ex){let ch=false;const off=ex.offsetMin||0;if(!ex.actEnd&&s.end){ex.locEnd=s.end;ex.actEnd=addMin(s.end,-off);ch=true;}if(!ex.actStart&&s.start){ex.locStart=s.start;ex.actStart=addMin(s.start,off);ch=true;}s.keys.forEach((k,i)=>{if(!ex.autoKeys.includes(k)){ex.autoKeys.push(k);(ex.rawLines=ex.rawLines||[]).push(s.raws[i]);}S.imported[k]=1;});if(ch){res.updated++;if(S.settings.autoReason&&!ex.reason&&calc(ex).ot>0)ex.reason=S.settings.autoReason;}else res.dup++;continue;}
     if(s.keys.every(k=>S.imported[k])){res.dup++;continue;}
     for(const k of s.keys)S.imported[k]=1;
-    const r=newRecord(s.date,rosterShift(s.date)||inferShift(s.start||s.end),'auto');r.actStart=s.start;r.actEnd=s.end;r.autoKeys=s.keys;
+    // 위치 시각 → 업무 시각: 도착 + 이동 분, 출발 − 이동 분 (실제보다 길게 잡히지 않게). 너무 짧은 근무는 보정 안 함
+    let off=S.settings.autoOffset||0;if(s.start&&s.end&&((toMin(s.end)-toMin(s.start)+1440)%1440)<=2*off)off=0;
+    const r=newRecord(s.date,rosterShift(s.date)||inferShift(s.start||s.end),'auto');r.locStart=s.start;r.locEnd=s.end;r.offsetMin=off;r.rawLines=s.raws;r.actStart=s.start?addMin(s.start,off):'';r.actEnd=s.end?addMin(s.end,-off):'';r.autoKeys=s.keys;
     if(S.settings.autoReason&&calc(r).ot>0)r.reason=S.settings.autoReason;
     s.orphan?res.orphan++:res.added++;
   }
@@ -229,30 +254,32 @@ async function shareOrDownload(blob,name){
   if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:name});return;}catch(e){if(e.name==='AbortError')return;}}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},3000);
 }
+// 사건 시각(단축어가 적은 시각·버튼 탭 시각)과 앱 등록 시각을 구분한다
+const evt=(r,w)=>r.source==='auto'?((w==='start'?r.locStart:r.locEnd)?`${w==='start'?r.locStart:r.locEnd} (단축어 파일)`:''):r.source==='live'?((w==='start'?r.stampStart:r.stampEnd)?`${fmtISO(w==='start'?r.stampStart:r.stampEnd)} (버튼)`:''):'';
 const hist=r=>(r.history||[]).map(x=>`${fmtISO(x.at)} ${FIELD[x.field]||x.field}: ${hv(x.field,x.from)}→${hv(x.field,x.to)}`).join(' | ');
 function exportCSV(ym){
   const w=S.settings.wage;
-  const H=['날짜','요일','근무조','정규시작','정규종료','실제출근','실제퇴근','조기출근(분)','연장퇴근(분)','초과합계(분)','야간겹침(분)','추정액(원)','사유','지시근거','메모','인계시작','시간외신청','신청메모','휴게미사용','동료','병원기록','첨부파일','기록구분','자동기록원본','출근기록시각','퇴근기록시각','생성시각','수정이력'];
-  const L=[H,...rows(ym).map(r=>{const z=calc(r);return[r.date,dow(r.date),r.shift,r.schedStart,r.schedEnd,r.actStart,r.actEnd,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?won(z,w):'',r.reason,r.basis,r.note,r.handoverStart||'',OTC[r.otClaim]||'',r.otClaimNote||'',r.noBreak?'예':'',r.peers||'',r.hospLogs||'',(r.files||[]).map(f=>f.name).join('; '),SRC[r.source],(r.autoKeys||[]).join('; '),r.stampStart?fmtISO(r.stampStart):'',r.stampEnd?fmtISO(r.stampEnd):'',fmtISO(r.createdAt),hist(r)];})];
-  const csv='﻿'+L.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const H=['날짜','요일','근무조','정규시작','정규종료','실제출근','실제퇴근','조기출근(분)','연장퇴근(분)','초과합계(분)','야간겹침(분)','추정액(원)','사유','지시근거','메모','인계시작','시간외신청','신청메모','휴게미사용','동료','병원기록','환복분(계산제외)','첨부파일','기록구분','위치도착','위치출발','이동보정(분)','자동기록원본줄','사건 출근시각(출처)','사건 퇴근시각(출처)','출근 서버시각','퇴근 서버시각','앱 등록시각','수정이력'];
+  const L=[H,...rows(ym).map(r=>{const z=calc(r);return[r.date,dow(r.date),r.shift,r.schedStart,r.schedEnd,r.actStart,r.actEnd,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?won(z,w):'',r.reason,r.basis,r.note,r.handoverStart||'',OTC[r.otClaim]||'',r.otClaimNote||'',r.noBreak?'예':'',r.peers||'',r.hospLogs||'',r.changeMin||'',(r.files||[]).map(f=>f.name).join('; '),SRC[r.source],r.locStart||'',r.locEnd||'',r.offsetMin??'',(r.rawLines||[]).join(' | '),evt(r,'start'),evt(r,'end'),r.srvStart?fmtISO(r.srvStart):'',r.srvEnd?fmtISO(r.srvEnd):'',fmtISO(r.createdAt),hist(r)];})];
+  const csv='﻿'+`"${HONEST_LINE}"\r\n`+L.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
   shareOrDownload(new Blob([csv],{type:'text/csv'}),`근무시간기록_${ym||'전체'}_${todayStr()}.csv`);
 }
-function reportHTML(ym){
+function reportHTML(ym,code){
   const w=S.settings.wage;const ms=monthly().filter(m=>!ym||m.ym===ym).reverse();
   const td=a=>'<tr>'+a.map(x=>`<td>${esc(x)}</td>`).join('')+'</tr>',th=a=>'<tr>'+a.map(x=>`<th>${x}</th>`).join('')+'</tr>';
-  let h=`<h2>근무시간 기록 보고서 ${ym?ymLabel(ym):'(전체)'}</h2><p>작성 ${fmtISO(new Date().toISOString())} · 통상시급 ${w?wonF(w):'미입력'} · 급여일 매월 ${S.settings.payday}일(${S.settings.payMonth==='next'?'익월':'당월'} 지급)<br>금액은 추정치(초과 ×1.5, 야간 겹침 +0.5)이며 최종 계산은 노무사 확인이 필요합니다. 기록구분: 당일 기록(그날 버튼), 자동 기록(폰 위치·시간 자동화가 남긴 도착·출발 시각), 사후 복원(나중에 입력).</p>`;
+  let h=`<h2>근무시간 기록 보고서 ${ym?ymLabel(ym):'(전체)'}</h2><p>작성 ${fmtISO(new Date().toISOString())} · 통상시급 ${w?wonF(w):'미입력'} · 급여일 매월 ${S.settings.payday}일(${S.settings.payMonth==='next'?'익월':'당월'} 지급)<br>금액은 추정치(초과 ×1.5, 야간 겹침 +0.5)이며 최종 계산은 노무사 확인이 필요합니다. 기록구분: 당일 기록(그날 버튼), 자동 기록(폰 위치·시간 자동화가 남긴 도착·출발 시각, 이동 ${S.settings.autoOffset||0}분 보정), 사후 복원(나중에 입력).<br><b>${HONEST_LINE}</b>${code?`<br>봉인 코드 ${code} (범위 내 기록을 생성 순으로 SHA-256 연쇄 해시한 값의 앞 12자)`:''}</p>`;
   h+='<table>'+th(['월','건수(당일/자동/복원)','초과합계','야간겹침','법정추정','급여명세 시간외','미지급추정','급여일','시효만료'])+ms.map(m=>{const e=monthEst(m);return td([ymLabel(m.ym),`${m.recs.length} (${m.live}/${m.auto}/${m.rest})`,fmtMin(m.ot),fmtMin(m.night),w?wonF(e.est):'-',S.pay[m.ym]!=null?wonF(e.paid):'-',w?(e.unpaid>0?wonF(e.unpaid):'없음'):'-',payDate(m.ym).toLocaleDateString('ko-KR'),expiry(m.ym).toLocaleDateString('ko-KR')]);}).join('')+'</table>';
-  h+='<table>'+th(['날짜','조','정규','실제','조기','연장','합계','야간','추정액','사유','지시근거·메모','증거 보강','첨부','구분','기록시각','수정이력'])+rows(ym).map(r=>{const z=calc(r);return td([`${r.date}(${dow(r.date)})`,r.shift,r.shift==='OFF'?'-':`${r.schedStart}–${r.schedEnd}`,`${r.actStart||'?'}–${r.actEnd||'?'}`,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?wonF(won(z,w)):'',r.reason,[r.basis,r.note].filter(Boolean).join(' / '),extra(r),(r.files||[]).map(f=>f.name).join(', '),SRC[r.source]+(r.autoKeys?'\n'+r.autoKeys.join('\n'):''),`생성 ${fmtISO(r.createdAt)}`+(r.stampStart?`\n출근탭 ${fmtISO(r.stampStart)}`:'')+(r.stampEnd?`\n퇴근탭 ${fmtISO(r.stampEnd)}`:''),hist(r)]);}).join('')+'</table>';
+  h+='<table>'+th(['날짜','조','정규','업무 시각','위치 시각(보정)','조기','연장','합계','야간','추정액','사유','지시근거·메모','증거 보강','첨부','구분','사건 시각 / 앱 등록','수정이력'])+rows(ym).map(r=>{const z=calc(r);return td([`${r.date}(${dow(r.date)})`,r.shift,r.shift==='OFF'?'-':`${r.schedStart}–${r.schedEnd}`,`${r.actStart||'?'}–${r.actEnd||'?'}`,r.source==='auto'?`${r.locStart||'?'}–${r.locEnd||'?'} (−${r.offsetMin||0}분)`:'',z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?wonF(won(z,w)):'',r.reason,[r.basis,r.note].filter(Boolean).join(' / '),extra(r)+(r.changeMin?` / 환복 ${r.changeMin}분(계산 제외)`:''),(r.files||[]).map(f=>f.name).join(', '),SRC[r.source]+(r.rawLines?'\n'+r.rawLines.join('\n'):''),[evt(r,'start')&&'출근 '+evt(r,'start'),evt(r,'end')&&'퇴근 '+evt(r,'end'),r.srvStart&&'서버 '+fmtISO(r.srvStart),`앱 등록 ${fmtISO(r.createdAt)}`].filter(Boolean).join('\n'),hist(r)]);}).join('')+'</table>';
   return h;
 }
-function printReport(ym){document.getElementById('print').innerHTML=reportHTML(ym);window.print();}
-function shareReport(ym){const html=`<!doctype html><html lang="ko"><meta charset="utf-8"><title>근무시간 기록</title><style>body{font-family:sans-serif;font-size:12px;padding:16px}table{border-collapse:collapse;width:100%;margin-bottom:16px}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top;white-space:pre-line}</style>${reportHTML(ym)}`;shareOrDownload(new Blob([html],{type:'text/html'}),`근무시간보고서_${ym||'전체'}_${todayStr()}.html`);}
-async function exportJSON(){const fs=await files.all();const j={app:'otlog',version:2,exportedAt:new Date().toISOString(),settings:S.settings,records:S.records,pay:S.pay,roster:S.roster,imported:S.imported,files:fs};shareOrDownload(new Blob([JSON.stringify(j)],{type:'application/json'}),`근무기록_백업_${todayStr()}.json`);}
+async function printReport(ym){document.getElementById('print').innerHTML=reportHTML(ym,await seal(ym?ym+'-31':null));window.print();}
+async function shareReport(ym){const code=await seal(ym?ym+'-31':null);const html=`<!doctype html><html lang="ko"><meta charset="utf-8"><title>근무시간 기록</title><style>body{font-family:sans-serif;font-size:12px;padding:16px}table{border-collapse:collapse;width:100%;margin-bottom:16px}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top;white-space:pre-line}</style>${reportHTML(ym,code)}`;shareOrDownload(new Blob([html],{type:'text/html'}),`근무시간보고서_${ym||'전체'}_${todayStr()}.html`);}
+async function exportJSON(){const fs=await files.all();const j={app:'otlog',version:2,exportedAt:new Date().toISOString(),settings:S.settings,records:S.records,pay:S.pay,roster:S.roster,imported:S.imported,sealed:S.sealed,files:fs};shareOrDownload(new Blob([JSON.stringify(j)],{type:'application/json'}),`근무기록_백업_${todayStr()}.json`);}
 async function importJSON(file){
   if(!file)return;let j;try{j=JSON.parse(await file.text());}catch(e){return alert('백업 파일이 아닙니다');}
   if(j.app!=='otlog'||!Array.isArray(j.records))return alert('백업 파일이 아닙니다');
   if(!confirm(`백업(${j.exportedAt?fmtISO(j.exportedAt):'?'}, 기록 ${j.records.length}건)으로 지금 데이터를 모두 교체할까요?`))return;
-  S={settings:{...DEF.settings,...j.settings},records:j.records,pay:j.pay||{},roster:j.roster||{},imported:j.imported||{}};save();
+  S={settings:{...DEF.settings,...j.settings},records:j.records,pay:j.pay||{},roster:j.roster||{},imported:j.imported||{},sealed:j.sealed||{}};save();
   await files.clear();for(const f of j.files||[])await files.put(f);
   alert('복원했습니다');render();
 }
@@ -279,14 +306,16 @@ function patch(r){
 }
 function editor(r,full){
   const id=r.id;
-  let h=`<div class=card><div class="row sb"><b id="ttl-${id}">${fmtDate(r.date)} ${SHIFT[r.shift]}</b><span class="${SRCB[r.source]}">${SRC[r.source]}</span></div>`;
-  if(r.autoKeys)h+=`<div class=mut>자동 기록 원본: ${r.autoKeys.join(', ')}</div>`;
+  let h=`<div class=card>${honestBox()}<div class="row sb"><b id="ttl-${id}">${fmtDate(r.date)} ${SHIFT[r.shift]}</b><span class="${SRCB[r.source]}">${SRC[r.source]}</span></div>`;
+  if(r.source==='auto')h+=`<div class=mut>위치 도착 <b>${r.locStart||'?'}</b> → 업무 시작 ${r.actStart||'?'} · 위치 출발 <b>${r.locEnd||'?'}</b> → 업무 종료 ${r.actEnd||'?'} <span class=mut>(이동 ${r.offsetMin||0}분 보정)</span></div>`;
+  if(r.rawLines)h+=`<div class=mut>원본 줄: ${esc(r.rawLines.join(' | '))}</div>`;
   if(full){
     h+=`<div class=grid2><div><label>날짜</label><input type=date value="${r.date}" onchange="setF('${id}','date',this.value)"></div><div><label>근무조</label><select onchange="setF('${id}','shift',this.value)">${Object.keys(SHIFT).map(s=>`<option value=${s} ${s===r.shift?'selected':''}>${SHIFT[s]}</option>`).join('')}</select></div></div>`;
     h+=`<div class=grid2 id="sched-${id}" style="${r.shift==='OFF'?'display:none':''}"><div><label>정규 시작</label><input type=time data-f=schedStart value="${r.schedStart}" onchange="setF('${id}','schedStart',this.value)"></div><div><label>정규 종료</label><input type=time data-f=schedEnd value="${r.schedEnd}" onchange="setF('${id}','schedEnd',this.value)"></div></div>`;
   }
-  h+=`<div class=grid2><div><label>실제 출근${r.stampStart?` <span class=mut>(${fmtTS(r.stampStart)} 탭)</span>`:''}</label><input type=time value="${r.actStart}" onchange="setF('${id}','actStart',this.value)"></div>`;
-  h+=`<div><label>실제 퇴근${r.stampEnd?` <span class=mut>(${fmtTS(r.stampEnd)} 탭)</span>`:''}</label>${r.actEnd||full?`<input type=time value="${r.actEnd}" onchange="setF('${id}','actEnd',this.value)">`:`<button class=p style="width:100%;min-height:44px" onclick="clockOut('${id}')">퇴근 지금 (${nowHM()})</button>`}</div></div>`;
+  const srvWarn=w=>{const d=Math.abs(clockDiff(w==='start'?r.stampStart:r.stampEnd,w==='start'?r.srvStart:r.srvEnd));return d>120?` <span class=warn>⚠ 폰 시계가 서버와 ${Math.round(d/60)}분 차이</span>`:'';};
+  h+=`<div class=grid2><div><label>실제 출근${r.stampStart?` <span class=mut>(${fmtTS(r.stampStart)} 탭${r.srvStart?' · 서버 '+fmtTS(r.srvStart).slice(6):''})</span>`+srvWarn('start'):''}</label><input type=time value="${r.actStart}" onchange="setF('${id}','actStart',this.value)"></div>`;
+  h+=`<div><label>실제 퇴근${r.stampEnd?` <span class=mut>(${fmtTS(r.stampEnd)} 탭${r.srvEnd?' · 서버 '+fmtTS(r.srvEnd).slice(6):''})</span>`+srvWarn('end'):''}</label>${r.actEnd||full?`<input type=time value="${r.actEnd}" onchange="setF('${id}','actEnd',this.value)">`:`<button class=p style="width:100%;min-height:44px" onclick="clockOut('${id}')">퇴근 지금 (${nowHM()})</button>`}</div></div>`;
   h+=`<div id="sum-${id}" style="margin-top:10px">${summary(r)}</div>`;
   h+=`<label>사유</label><div class=chips>${S.settings.reasons.map((x,i)=>`<button class="chip ${r.reason===x?'on':''}" onclick="setReason('${id}',${i})">${esc(x)}</button>`).join('')}</div>`;
   h+=`<label>지시 근거 <span class=mut>(누가·언제·어떻게 지시했는지, 안 하면 어떤 불이익인지)</span></label><textarea rows=2 placeholder="예: 10/20 병동 단톡 수간호사 공지 '인계 30분 전 도착'" onchange="setF('${id}','basis',this.value)">${esc(r.basis)}</textarea>`;
@@ -296,7 +325,8 @@ function editor(r,full){
 <label>신청 못 했거나 반려된 이유 <span class=mut>(수간호사 말, 분위기)</span></label><input value="${esc(r.otClaimNote||'')}" placeholder="예: '인계는 원래 일찍 오는 거다'라고 함" onchange="setF('${id}','otClaimNote',this.value)">
 <label class=chk><input type=checkbox ${r.noBreak?'checked':''} onchange="setF('${id}','noBreak',this.checked?'1':'')"> 휴게·식사 시간을 못 썼다</label>
 <label>함께 일찍 온 동료 <span class=mut>(이니셜만)</span></label><input value="${esc(r.peers||'')}" placeholder="예: K.M., 박O" onchange="setF('${id}','peers',this.value)">
-<label>병원에 남는 기록 <span class=mut>(체크만, 촬영 금지 — 퇴사 후 제출 요구할 목록)</span></label><div class=chips>${HOSP.map(x=>`<button class="chip ${(r.hospLogs||'').split(',').includes(x)?'on':''}" onclick="toggleHosp('${id}','${x}')">${x}</button>`).join('')}</div></details>`;
+<label>병원에 남는 기록 <span class=mut>(체크만, 촬영 금지 — 퇴사 후 제출 요구할 목록)</span></label><div class=chips>${HOSP.map(x=>`<button class="chip ${(r.hospLogs||'').split(',').includes(x)?'on':''}" onclick="toggleHosp('${id}','${x}')">${x}</button>`).join('')}</div>
+<label>환복·준비 시간(분) <span class=mut>(계산에서 뺌. 근로시간 인정 여부는 노무사 판단)</span></label><input type=number inputmode=numeric value="${r.changeMin||''}" placeholder="예: 10" onchange="setF('${id}','changeMin',this.value)"></details>`;
   h+=`<label>메모</label><textarea rows=2 onchange="setF('${id}','note',this.value)">${esc(r.note)}</textarea>`;
   h+=`<div style="margin-top:14px"><button class=p style="width:100%" onclick="sendSelf('${id}')">📨 나에게 보내기 (메일·카톡)</button><div class=mut style="margin-top:4px">메일·카톡 서버에 시각이 남아 "나중에 꾸며 썼다"는 의심을 막습니다.</div></div>`;
   if(full){
@@ -320,7 +350,9 @@ function home(){
   h+=`<div class=card><div class="row sb"><b>${ymLabel(ym)}</b><a href="#" onclick="go('month');return false">월별 보기</a></div><div class=kv><span>초과 합계</span><b>${fmtMin(m?m.ot:0)}</b></div><div class=kv><span>법정 수당 추정</span><b>${w&&m?wonF(monthEst(m).est):'-'}</b></div><div class=kv><span>기록</span><b>${m?`${m.recs.length}건 (자동 ${m.auto} · 당일 ${m.live} · 복원 ${m.rest})`:'0건'}</b></div></div>`;
   const chk=S.records.filter(needsCheck).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
   if(chk.length)h+=`<div class=card><b>확인 필요 ${chk.length}건</b>${chk.map(r=>`<div class=item onclick="openForm('${r.id}')"><b>${fmtDate(r.date)} ${r.shift}</b> <span class=mut>${r.actStart||'--:--'}–${r.actEnd||'--:--'} · ${checkText(r)}</span></div>`).join('')}</div>`;
-  h+=`<div class=card><div class=row><label class="btn p">📥 자동 기록 가져오기<input type=file accept=".txt,.log,.csv,text/plain" hidden onchange="importLog(this.files[0])"></label><button onclick="go('guide')">자동화 설치 안내</button></div><div class=mut style="margin-top:8px">주 1회: 파일 앱 › iCloud Drive › Shortcuts › <b>근무기록.txt</b> 선택. 이미 들어온 줄은 건너뜁니다.${Object.keys(S.roster).length?'':' 근무표를 넣으면 날짜별 근무조가 자동으로 맞춰집니다.'}</div></div>`;
+  const sealed=S.sealed||{};const prev=(()=>{const d=new Date();d.setMonth(d.getMonth()-1);return todayStr(d).slice(0,7);})();const pm=monthly().find(x=>x.ym===prev);
+  h+=`<div class=card><b>봉인 코드 보내기 <span class=mut>(주 1회)</span></b><div class=mut style="margin:4px 0 8px">기록 전체를 암호 해시로 묶은 12자 코드를 나에게 메일·카톡으로 보내면, 그 서버 시각이 이전 기록 전체를 고정합니다. 나중에 고치면 코드가 달라집니다.${sealed.all?` 마지막 봉인 ${fmtTS(sealed.all.at)} · ${sealed.all.code}`:''}</div><div class=row><button class=p onclick="sendSeal()">📨 전체 봉인 보내기</button>${pm&&!sealed[prev]?`<button onclick="sendSeal('${prev}')">${ymLabel(prev)} 보고서+봉인 보내기</button>`:''}</div></div>`;
+  h+=`<div class=card>${honestBox()}<div class=row><label class="btn p">📥 자동 기록 가져오기<input type=file accept=".txt,.log,.csv,text/plain" hidden onchange="importLog(this.files[0])"></label><button onclick="go('guide')">자동화 설치 안내</button></div><div class=mut style="margin-top:8px">주 1회: 파일 앱 › iCloud Drive › Shortcuts › <b>근무기록.txt</b> 선택. 이미 들어온 줄은 건너뛰고 원본 줄을 그대로 보관합니다. 파일 자체도 지우지 마세요.${Object.keys(S.roster).length?'':' 근무표를 넣으면 날짜별 근무조가 자동으로 맞춰집니다.'}</div></div>`;
   return h+todayCard();
 }
 function list(){
@@ -391,11 +423,12 @@ function month(){
 <label>급여명세서의 시간외수당(원)</label><input type=number inputmode=numeric placeholder="그 달 실제로 받은 금액" value="${S.pay[m.ym]??''}" onchange="setPay('${m.ym}',this.value)">
 <div class=kv style="margin-top:6px"><span>미지급 추정</span><b class="${e.unpaid>0?'warn':''}">${w?(e.unpaid>0?wonF(e.unpaid):'없음 (받은 금액 ≥ 추정액)'):'-'}</b></div>
 <div class=kv><span>시효 만료 <span class=mut>(급여일 ${payDate(m.ym).toLocaleDateString('ko-KR')} + 3년)</span></span><span><b>${ex.toLocaleDateString('ko-KR')}</b> ${badge}</span></div>
-<div class=row style="margin-top:10px"><button onclick="exportCSV('${m.ym}')">CSV</button><button onclick="printReport('${m.ym}')">인쇄·PDF</button><button onclick="shareReport('${m.ym}')">보고서 공유</button></div></div>`;
+<div class=kv><span>봉인</span><span>${S.sealed[m.ym]?`<b>${S.sealed[m.ym].code}</b> <span class=mut>${fmtTS(S.sealed[m.ym].at)} 보냄</span>`:'<span class=mut>아직 안 보냄</span>'}</span></div>
+<div class=row style="margin-top:10px"><button onclick="exportCSV('${m.ym}')">CSV</button><button onclick="printReport('${m.ym}')">인쇄·PDF</button><button onclick="shareReport('${m.ym}')">보고서 공유</button><button onclick="sendSeal('${m.ym}')">봉인 보내기</button></div></div>`;
   }
   return h;
 }
-function shiftInputs(){const s=S.settings;return ['D','E','N'].map(k=>`<div class=grid2><div><label>${SHIFT[k]} 시작</label><input type=time value="${s.shifts[k][0]}" onchange="setShift('${k}',0,this.value)"></div><div><label>종료</label><input type=time value="${s.shifts[k][1]}" onchange="setShift('${k}',1,this.value)"></div></div>`).join('');}
+function shiftInputs(){const s=S.settings;return `<label>병원 반경 진입부터 병동 도착까지 이동 시간(분) <span class=mut>— 위치 자동 기록에서 이만큼 빼고 계산. 모르면 10</span></label><input type=number inputmode=numeric min=0 max=60 value="${s.autoOffset??10}" onchange="setS('autoOffset',Math.max(0,+this.value||0))">`+['D','E','N'].map(k=>`<div class=grid2><div><label>${SHIFT[k]} 시작</label><input type=time value="${s.shifts[k][0]}" onchange="setShift('${k}',0,this.value)"></div><div><label>종료</label><input type=time value="${s.shifts[k][1]}" onchange="setShift('${k}',1,this.value)"></div></div>`).join('');}
 function payInputs(){const s=S.settings;return `<label>통상시급(원) <span class=mut>— 급여명세서 기준, 나중에 넣어도 됨</span></label><input type=number inputmode=numeric value="${s.wage||''}" placeholder="예: 15000" onchange="setS('wage',+this.value||0)">
 <div class=grid2><div><label>급여일 (매월)</label><input type=number inputmode=numeric min=1 max=31 value="${s.payday}" onchange="setS('payday',Math.min(31,Math.max(1,+this.value||25)))"></div><div><label>지급 기준</label><select onchange="setS('payMonth',this.value)"><option value=same ${s.payMonth==='same'?'selected':''}>당월분 당월 지급</option><option value=next ${s.payMonth==='next'?'selected':''}>당월분 익월 지급</option></select></div></div>`;}
 function settings(){
@@ -439,12 +472,13 @@ const TOUR=[
 <li>이 앱은 폰의 자동화가 남긴 도착·출발 시각을 읽어 기록을 만듭니다. 매일 열 필요가 없습니다. 기록을 고치면 원래 값과 고친 시각이 남고, 지난 날짜를 나중에 넣으면 '사후 복원'으로 구분됩니다.</li>
 <li>매달 급여명세서와 근무표(환자 정보 없는 것)를 보관하세요.</li>
 <li class=warn><b>절대 금지</b>: 환자 이름·등록번호·EMR 화면 촬영. 의료법 제23조·개인정보보호법 위반으로 실제 수사받은 사례가 있습니다. 출입카드·EMR 로그인 같은 병원 기록은 나중에 노동청·법원을 통해 제출을 요구하면 됩니다.</li>
+<li>주 1회 <b>봉인 코드</b>를 나에게 메일로 보내세요. 메일 서버 시각이 그 이전 기록 전체를 고정해 "나중에 썼다"는 의심을 막습니다. 단축어가 도착·출발 때 보내는 메일도 같은 역할을 합니다.</li>
 <li>이 앱의 데이터는 <b>이 폰 안에만</b> 있습니다. 서버도 계정도 없습니다. 병원 PC·병원 계정에 두지 마세요.</li></ul>
 <div class=src>출처: <a href="https://www.kyeonggi.com/article/20260105580318" target=_blank>경기일보 (EMR 촬영 수사 사례)</a></div>`},
 {t:'설정은 3분이면 끝납니다',b:`<p class=mut>병원 근무조 시각을 맞춰 주세요. 나머지는 나중에 바꿀 수 있습니다.</p>${'${shiftInputs()}'}${'${payInputs()}'}<p class=mut style="margin-top:12px">다음 화면에서 폰 자동화(병원 도착·출발 때 시각 남기기, 근무 시작 알림)를 켜는 방법을 안내합니다.</p>`}
 ];
 function tour(){
-  const n=TOUR.length,p=TOUR[tourPage];const body=tourPage===n-1?p.b.replace('${shiftInputs()}',shiftInputs()).replace('${payInputs()}',payInputs()):p.b;
+  const n=TOUR.length,p=TOUR[tourPage];const body=tourPage===n-1?p.b.replace('${shiftInputs()}',shiftInputs()).replace('${payInputs()}',payInputs()):tourPage===3?honestBox()+p.b:p.b;
   return `<div class=card><div class="row sb"><span class=mut>${tourPage+1} / ${n}</span><a href="#" class=mut onclick="tourDone(false);return false">건너뛰기</a></div><h2>${p.t}</h2>${body}<div class="row sb" style="margin-top:16px"><button onclick="tourGo(-1)" ${tourPage?'':'disabled'}>이전</button>${tourPage<n-1?`<button class=p onclick="tourGo(1)">다음</button>`:`<button class=p onclick="tourDone(true)">시작하기</button>`}</div></div>`;
 }
 function tourGo(d){tourPage=Math.max(0,Math.min(TOUR.length-1,tourPage+d));render();}
@@ -457,8 +491,10 @@ function guide(){return `<div class=card><h3>1. 어떻게 되나</h3><p class=mu
 <li>동작 검색 <b>"날짜 포맷 지정"</b>(Format Date) 추가 → 날짜 포맷 <b>사용자화</b>, 포맷 문자열 <code>yyyy-MM-dd HH:mm</code></li>
 <li>동작 <b>"텍스트"</b> 추가 → 내용: 위 결과(<b>포맷된 날짜</b>)를 넣고 한 칸 띄운 뒤 <code>in</code></li>
 <li>동작 <b>"텍스트 파일에 추가"</b>(Append to Text File) 추가 → iCloud Drive, 파일 경로 <code>/Shortcuts/근무기록.txt</code>, <b>새로운 줄 만들기 켬</b></li>
+<li>동작 <b>"이메일 보내기"</b> 추가 → 받는 사람 <b>내 메일</b>, 제목·내용에 위 텍스트, <b>작성 시트 표시 끔</b>. 메일 서버 시각이 남아 가장 강한 증거가 됩니다(기본으로 켜 두세요)</li>
 <li>이름 <b>출근 기록</b>으로 저장</li>
 <li>같은 방법으로 <b>퇴근 기록</b>을 하나 더 만들고 텍스트 끝을 <code>out</code>으로</li></ol>
+<p class=mut>자동화에서 메일이 확인 없이 나가는지 처음 하루 확인하세요. 안 되면 앱의 '봉인 보내기'를 주 1회 눌러도 같은 효과입니다.</p>
 <p class=mut style="margin:0">세부사항(ⓘ)에서 <b>"Apple Watch에 표시"</b>를 켜면 워치의 단축어 앱에서도 탭 한 번으로 기록됩니다.</p></div>
 <div class=card><h3>3. 자동화 켜기 (도착·출발)</h3><ol>
 <li>단축어 앱 › <b>자동화</b> 탭 › ＋ › <b>도착</b></li>
@@ -473,7 +509,7 @@ function guide(){return `<div class=card><h3>1. 어떻게 되나</h3><p class=mu
 <li>이브닝·나이트 시작 시각으로 자동화를 2개 더</li></ol>
 <p class=mut style="margin:0">알림은 iPhone에 뜹니다. Apple Watch에서는 단축어 앱(또는 컴플리케이션)에서 '출근 기록'을 탭하면 됩니다.</p></div>
 <div class=card><h3>5. 다른 트리거</h3><ul style="margin:0"><li><b>Wi-Fi</b>: 자동화 › Wi-Fi › 병동 Wi-Fi에 연결될 때 → 출근 기록, 연결 해제 → 퇴근 기록</li><li><b>NFC 스티커</b>: 사물함에 붙이고 자동화 › NFC → 태그 등록 → 출근 기록 (퇴근용 하나 더)</li><li><b>뒷면 탭</b>: 설정 › 손쉬운 사용 › 터치 › 뒷면 탭 › 두 번 탭 → 출근 기록</li></ul></div>
-<div class=card><h3>6. 제3자 시각 남기기 (선택)</h3><p class=mut style="margin:0">'출근 기록' 단축어 끝에 <b>"이메일 보내기"</b> 동작을 추가하고 받는 사람을 내 메일로, "작성 시트 표시"를 끄면 매번 메일이 가서 메일 서버 시각이 남습니다. 나중에 꾸며 썼다는 의심을 막는 가장 쉬운 방법입니다.</p></div>
+<div class=card><h3>6. 원본 보관</h3><p class=mut style="margin:0"><code>근무기록.txt</code>는 지우거나 고치지 마세요. 앱은 가져온 줄을 그대로 보관하지만 원본 파일과 메일이 함께 있어야 가장 강합니다. 도착 시각은 병원 반경 진입 시각이라 앱은 설정한 이동 시간(기본 10분)을 빼고 업무 시각을 계산하며, 보고서에는 두 시각을 모두 적습니다.</p></div>
 <div class=card><h3>7. Android</h3><p class=mut style="margin:0">MacroDroid·Tasker 같은 자동화 앱으로 같은 형식의 줄을 텍스트 파일에 쓰면 이 앱에서 똑같이 가져올 수 있습니다. (실제 기기 확인 전)</p></div>
 <div class=row style="margin-bottom:12px"><button class=p onclick="go('home')">홈으로</button></div>`;}
 
