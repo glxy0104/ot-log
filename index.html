@@ -49,6 +49,8 @@ nav button.on{color:var(--acc);font-weight:700}
 .thumbs img{width:72px;height:72px;object-fit:cover;border-radius:8px;background:var(--bd)}
 .item{padding:10px 0;border-bottom:1px solid var(--bd);cursor:pointer}
 a{color:var(--acc)}
+details{margin-top:12px}summary{cursor:pointer;color:var(--acc);font-size:14px;padding:6px 0}
+.chk{display:flex;align-items:center;gap:8px;color:var(--fg);font-size:inherit;margin-top:12px}.chk input{width:auto;min-height:0;transform:scale(1.3)}
 dialog{border:0;border-radius:12px;padding:16px;max-width:92vw;background:var(--card);color:var(--fg)}
 dialog::backdrop{background:rgba(0,0,0,.6)}
 #print{display:none}
@@ -70,9 +72,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 // ---------- 데이터 ----------
 const KEY='otlog.v1';
 const DEF={settings:{wage:0,payday:25,payMonth:'same',shifts:{D:['07:00','15:00'],E:['15:00','23:00'],N:['23:00','07:00']},reasons:['인수인계','인증평가 준비','교육·회의','업무 마무리','기타']},records:[],pay:{}};
-const FIELD={date:'날짜',shift:'근무조',schedStart:'정규시작',schedEnd:'정규종료',actStart:'실제출근',actEnd:'실제퇴근',reason:'사유',basis:'지시근거',note:'메모',files:'첨부'};
+const FIELD={date:'날짜',shift:'근무조',schedStart:'정규시작',schedEnd:'정규종료',actStart:'실제출근',actEnd:'실제퇴근',reason:'사유',basis:'지시근거',note:'메모',files:'첨부',handoverStart:'인계시작',otClaim:'시간외신청',otClaimNote:'신청메모',noBreak:'휴게미사용',peers:'동료',hospLogs:'병원기록'};
 const SHIFT={D:'데이(D)',E:'이브닝(E)',N:'나이트(N)',OFF:'휴일(OFF)'};
 const DOW='일월화수목금토';
+const OTC={'':'선택',none:'신청 안 함',applied:'신청함',rejected:'신청했으나 반려',blocked:'신청 못 함(분위기·지시)'};
+const HOSP=['출입카드','EMR 로그인','간호기록 작성시각','근무표','기타'];
 let S=load(), view='today', formId=null;
 
 function load(){try{const j=JSON.parse(localStorage.getItem(KEY));if(j)return{settings:{...DEF.settings,...j.settings},records:j.records||[],pay:j.pay||{}};}catch(e){}return JSON.parse(JSON.stringify(DEF));}
@@ -122,7 +126,7 @@ function calc(r){
 const won=(z,w)=>Math.round(w*(z.ot/60*1.5+z.night/60*0.5));
 function payDate(ym){let [y,m]=parts(ym);if(S.settings.payMonth==='next'){m++;if(m>12){m=1;y++;}}const last=new Date(y,m,0).getDate();return new Date(y,m-1,Math.min(S.settings.payday,last));}
 function expiry(ym){const d=payDate(ym);d.setFullYear(d.getFullYear()+3);return d;}
-function monthly(){const g={};for(const r of S.records){const ym=r.date.slice(0,7);const o=g[ym]=g[ym]||{ym,recs:[],ot:0,night:0,live:0,rest:0};const z=calc(r);o.recs.push(r);o.ot+=z.ot;o.night+=z.night;r.source==='restored'?o.rest++:o.live++;}return Object.values(g).sort((a,b)=>b.ym.localeCompare(a.ym));}
+function monthly(){const g={};for(const r of S.records){const ym=r.date.slice(0,7);const o=g[ym]=g[ym]||{ym,recs:[],ot:0,night:0,live:0,rest:0,noBreak:0};const z=calc(r);o.recs.push(r);o.ot+=z.ot;o.night+=z.night;o.noBreak+=r.noBreak?1:0;r.source==='restored'?o.rest++:o.live++;}return Object.values(g).sort((a,b)=>b.ym.localeCompare(a.ym));}
 function monthEst(m){const w=S.settings.wage;const est=w?Math.round(w*(m.ot/60*1.5+m.night/60*0.5)):0;const paid=+(S.pay[m.ym]||0);return{est,paid,unpaid:est-paid};}
 const rows=ym=>[...S.records].filter(r=>!ym||r.date.startsWith(ym)).sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
 
@@ -140,6 +144,12 @@ function setF(id,f,v){
   save();patch(r);
 }
 function setReason(id,i){const r=rec(id);const v=S.settings.reasons[i];setF(id,'reason',r.reason===v?'':v);render();}
+function toggleHosp(id,x){const r=rec(id);const a=(r.hospLogs||'').split(',').filter(Boolean);const i=a.indexOf(x);i<0?a.push(x):a.splice(i,1);setF(id,'hospLogs',a.join(','));render();}
+const hv=(f,v)=>f==='noBreak'?(v?'예':'아니오'):f==='otClaim'?(OTC[v]||v||''):(v||'');
+const extra=r=>[r.handoverStart&&'인계 시작 '+r.handoverStart,r.otClaim&&'시간외 신청: '+OTC[r.otClaim]+(r.otClaimNote?' ('+r.otClaimNote+')':''),r.noBreak&&'휴게·식사 못 씀',r.peers&&'동료 '+r.peers,r.hospLogs&&'병원 기록 있음: '+r.hospLogs].filter(Boolean).join(' / ');
+// 독립 타임스탬프: 기록 요약을 메일·카톡으로 나에게 보내 제3자 서버 시각을 남긴다
+function recText(r){const z=calc(r);return[`[근무시간 기록] ${r.date}(${dow(r.date)}) ${SHIFT[r.shift]}`,r.shift!=='OFF'?`정규 ${r.schedStart}–${r.schedEnd}`:'',`실제 ${r.actStart||'?'}–${r.actEnd||'?'}`+(z.ok?` → 초과 ${z.ot}분 (조기 ${z.early}·연장 ${z.late}·야간 ${z.night})`:''),r.reason&&`사유: ${r.reason}`,r.basis&&`지시 근거: ${r.basis}`,extra(r),r.note&&`메모: ${r.note}`,`기록 생성 ${fmtISO(r.createdAt)}`+(r.stampStart?` / 출근탭 ${fmtISO(r.stampStart)}`:'')+(r.stampEnd?` / 퇴근탭 ${fmtISO(r.stampEnd)}`:''),(r.history||[]).length?'수정: '+hist(r):''].filter(Boolean).join('\n');}
+async function sendSelf(id){const t=recText(rec(id));if(navigator.share){try{await navigator.share({text:t});return;}catch(e){if(e.name==='AbortError')return;}}location.href='mailto:?subject='+encodeURIComponent(t.split('\n')[0])+'&body='+encodeURIComponent(t);}
 function openNew(date,source){if(!date){const d=new Date();d.setDate(d.getDate()-1);date=todayStr(d);}const r=newRecord(date,'D',source);openForm(r.id);}
 function openForm(id){formId=id;view='form';render();}
 async function delRec(id){const r=rec(id);if(!confirm(`${fmtDate(r.date)} ${SHIFT[r.shift]} 기록을 삭제할까요? 되돌릴 수 없습니다.`))return;for(const f of r.files||[])await files.del(f.id);S.records=S.records.filter(x=>x.id!==id);save();view='list';render();}
@@ -172,11 +182,11 @@ async function shareOrDownload(blob,name){
   if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:name});return;}catch(e){if(e.name==='AbortError')return;}}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},3000);
 }
-const hist=r=>(r.history||[]).map(x=>`${fmtISO(x.at)} ${FIELD[x.field]||x.field}: ${x.from}→${x.to}`).join(' | ');
+const hist=r=>(r.history||[]).map(x=>`${fmtISO(x.at)} ${FIELD[x.field]||x.field}: ${hv(x.field,x.from)}→${hv(x.field,x.to)}`).join(' | ');
 function exportCSV(ym){
   const w=S.settings.wage;
-  const H=['날짜','요일','근무조','정규시작','정규종료','실제출근','실제퇴근','조기출근(분)','연장퇴근(분)','초과합계(분)','야간겹침(분)','추정액(원)','사유','지시근거','메모','첨부파일','기록구분','출근기록시각','퇴근기록시각','생성시각','수정이력'];
-  const L=[H,...rows(ym).map(r=>{const z=calc(r);return[r.date,dow(r.date),r.shift,r.schedStart,r.schedEnd,r.actStart,r.actEnd,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?won(z,w):'',r.reason,r.basis,r.note,(r.files||[]).map(f=>f.name).join('; '),r.source==='restored'?'사후복원':'당일',r.stampStart?fmtISO(r.stampStart):'',r.stampEnd?fmtISO(r.stampEnd):'',fmtISO(r.createdAt),hist(r)];})];
+  const H=['날짜','요일','근무조','정규시작','정규종료','실제출근','실제퇴근','조기출근(분)','연장퇴근(분)','초과합계(분)','야간겹침(분)','추정액(원)','사유','지시근거','메모','인계시작','시간외신청','신청메모','휴게미사용','동료','병원기록','첨부파일','기록구분','출근기록시각','퇴근기록시각','생성시각','수정이력'];
+  const L=[H,...rows(ym).map(r=>{const z=calc(r);return[r.date,dow(r.date),r.shift,r.schedStart,r.schedEnd,r.actStart,r.actEnd,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?won(z,w):'',r.reason,r.basis,r.note,r.handoverStart||'',OTC[r.otClaim]||'',r.otClaimNote||'',r.noBreak?'예':'',r.peers||'',r.hospLogs||'',(r.files||[]).map(f=>f.name).join('; '),r.source==='restored'?'사후복원':'당일',r.stampStart?fmtISO(r.stampStart):'',r.stampEnd?fmtISO(r.stampEnd):'',fmtISO(r.createdAt),hist(r)];})];
   const csv='﻿'+L.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
   shareOrDownload(new Blob([csv],{type:'text/csv'}),`근무시간기록_${ym||'전체'}_${todayStr()}.csv`);
 }
@@ -185,7 +195,7 @@ function reportHTML(ym){
   const td=a=>'<tr>'+a.map(x=>`<td>${esc(x)}</td>`).join('')+'</tr>',th=a=>'<tr>'+a.map(x=>`<th>${x}</th>`).join('')+'</tr>';
   let h=`<h2>근무시간 기록 보고서 ${ym?ymLabel(ym):'(전체)'}</h2><p>작성 ${fmtISO(new Date().toISOString())} · 통상시급 ${w?wonF(w):'미입력'} · 급여일 매월 ${S.settings.payday}일(${S.settings.payMonth==='next'?'익월':'당월'} 지급)<br>금액은 추정치(초과 ×1.5, 야간 겹침 +0.5)이며 최종 계산은 노무사 확인이 필요합니다. '사후복원' 기록은 당일 기록과 구분됩니다.</p>`;
   h+='<table>'+th(['월','건수(당일/복원)','초과합계','야간겹침','법정추정','급여명세 시간외','미지급추정','급여일','시효만료'])+ms.map(m=>{const e=monthEst(m);return td([ymLabel(m.ym),`${m.recs.length} (${m.live}/${m.rest})`,fmtMin(m.ot),fmtMin(m.night),w?wonF(e.est):'-',S.pay[m.ym]!=null?wonF(e.paid):'-',w?(e.unpaid>0?wonF(e.unpaid):'없음'):'-',payDate(m.ym).toLocaleDateString('ko-KR'),expiry(m.ym).toLocaleDateString('ko-KR')]);}).join('')+'</table>';
-  h+='<table>'+th(['날짜','조','정규','실제','조기','연장','합계','야간','추정액','사유','지시근거·메모','첨부','구분','기록시각','수정이력'])+rows(ym).map(r=>{const z=calc(r);return td([`${r.date}(${dow(r.date)})`,r.shift,r.shift==='OFF'?'-':`${r.schedStart}–${r.schedEnd}`,`${r.actStart||'?'}–${r.actEnd||'?'}`,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?wonF(won(z,w)):'',r.reason,[r.basis,r.note].filter(Boolean).join(' / '),(r.files||[]).map(f=>f.name).join(', '),r.source==='restored'?'사후복원':'당일',`생성 ${fmtISO(r.createdAt)}`+(r.stampStart?`\n출근탭 ${fmtISO(r.stampStart)}`:'')+(r.stampEnd?`\n퇴근탭 ${fmtISO(r.stampEnd)}`:''),hist(r)]);}).join('')+'</table>';
+  h+='<table>'+th(['날짜','조','정규','실제','조기','연장','합계','야간','추정액','사유','지시근거·메모','증거 보강','첨부','구분','기록시각','수정이력'])+rows(ym).map(r=>{const z=calc(r);return td([`${r.date}(${dow(r.date)})`,r.shift,r.shift==='OFF'?'-':`${r.schedStart}–${r.schedEnd}`,`${r.actStart||'?'}–${r.actEnd||'?'}`,z.ok?z.early:'',z.ok?z.late:'',z.ok?z.ot:'',z.ok?z.night:'',z.ok&&w?wonF(won(z,w)):'',r.reason,[r.basis,r.note].filter(Boolean).join(' / '),extra(r),(r.files||[]).map(f=>f.name).join(', '),r.source==='restored'?'사후복원':'당일',`생성 ${fmtISO(r.createdAt)}`+(r.stampStart?`\n출근탭 ${fmtISO(r.stampStart)}`:'')+(r.stampEnd?`\n퇴근탭 ${fmtISO(r.stampEnd)}`:''),hist(r)]);}).join('')+'</table>';
   return h;
 }
 function printReport(ym){document.getElementById('print').innerHTML=reportHTML(ym);window.print();}
@@ -233,9 +243,16 @@ function editor(r,full){
   h+=`<label>사유</label><div class=chips>${S.settings.reasons.map((x,i)=>`<button class="chip ${r.reason===x?'on':''}" onclick="setReason('${id}',${i})">${esc(x)}</button>`).join('')}</div>`;
   h+=`<label>지시 근거 <span class=mut>(누가·언제·어떻게 지시했는지, 안 하면 어떤 불이익인지)</span></label><textarea rows=2 placeholder="예: 10/20 병동 단톡 수간호사 공지 '인계 30분 전 도착'" onchange="setF('${id}','basis',this.value)">${esc(r.basis)}</textarea>`;
   h+=`<label>근거 첨부 <span class=mut>(공지 캡처·단톡·출석부·녹음)</span></label><div class=thumbs>${(r.files||[]).map(f=>f.type.startsWith('image/')?`<img data-fid="${f.id}" alt="${esc(f.name)}" onclick="viewFile('${f.id}')">`:`<button onclick="viewFile('${f.id}')">📎 ${esc(f.name)}</button>`).join('')}<label class=btnlike>＋ 추가<input type=file accept="image/*,audio/*,application/pdf" multiple hidden onchange="addFiles('${id}',this.files)"></label></div><div class="mut warn" style="margin-top:6px">환자 이름·등록번호·EMR 화면은 첨부하지 마세요.</div>`;
+  h+=`<details ${full?'open':''}><summary>증거 보강 (인계 시작·신청 여부·휴게·동료·병원 기록)</summary>
+<div class=grid2><div><label>인계 시작 시각 <span class=mut>(정규 시작 전이면 지시 근거)</span></label><input type=time value="${r.handoverStart||''}" onchange="setF('${id}','handoverStart',this.value)"></div><div><label>시간외근무 신청</label><select onchange="setF('${id}','otClaim',this.value)">${Object.keys(OTC).map(k=>`<option value="${k}" ${(r.otClaim||'')===k?'selected':''}>${OTC[k]}</option>`).join('')}</select></div></div>
+<label>신청 못 했거나 반려된 이유 <span class=mut>(수간호사 말, 분위기)</span></label><input value="${esc(r.otClaimNote||'')}" placeholder="예: '인계는 원래 일찍 오는 거다'라고 함" onchange="setF('${id}','otClaimNote',this.value)">
+<label class=chk><input type=checkbox ${r.noBreak?'checked':''} onchange="setF('${id}','noBreak',this.checked?'1':'')"> 휴게·식사 시간을 못 썼다</label>
+<label>함께 일찍 온 동료 <span class=mut>(이니셜만)</span></label><input value="${esc(r.peers||'')}" placeholder="예: K.M., 박O" onchange="setF('${id}','peers',this.value)">
+<label>병원에 남는 기록 <span class=mut>(체크만, 촬영 금지 — 퇴사 후 제출 요구할 목록)</span></label><div class=chips>${HOSP.map(x=>`<button class="chip ${(r.hospLogs||'').split(',').includes(x)?'on':''}" onclick="toggleHosp('${id}','${x}')">${x}</button>`).join('')}</div></details>`;
   h+=`<label>메모</label><textarea rows=2 onchange="setF('${id}','note',this.value)">${esc(r.note)}</textarea>`;
+  h+=`<div style="margin-top:14px"><button class=p style="width:100%" onclick="sendSelf('${id}')">📨 나에게 보내기 (메일·카톡)</button><div class=mut style="margin-top:4px">메일·카톡 서버에 시각이 남아 "나중에 꾸며 썼다"는 의심을 막습니다. 매일 퇴근 후 한 번 보내세요.</div></div>`;
   if(full){
-    h+=`<label>기록 정보</label><div class=mut>생성 ${fmtISO(r.createdAt)}</div>${(r.history||[]).map(x=>`<div class=mut>${fmtISO(x.at)} ${FIELD[x.field]||x.field}: ${esc(x.from)||'(없음)'} → ${esc(x.to)||'(없음)'}</div>`).join('')}`;
+    h+=`<label>기록 정보</label><div class=mut>생성 ${fmtISO(r.createdAt)}</div>${(r.history||[]).map(x=>`<div class=mut>${fmtISO(x.at)} ${FIELD[x.field]||x.field}: ${esc(hv(x.field,x.from))||'(없음)'} → ${esc(hv(x.field,x.to))||'(없음)'}</div>`).join('')}`;
     h+=`<div class="row sb" style="margin-top:14px"><button onclick="go('list')">목록으로</button><button class=warn onclick="delRec('${id}')">삭제</button></div>`;
   }else h+=`<div class="row sb" style="margin-top:14px"><button onclick="openForm('${id}')">자세히·수정 이력</button><a href="#" class=mut onclick="openNew(todayStr(),'live');return false">오늘 기록 하나 더</a></div>`;
   return h+'</div>';
@@ -263,6 +280,7 @@ function list(){
 function month(){
   const ms=monthly(),w=S.settings.wage;
   let h=`<div class=row style="margin-bottom:12px"><button onclick="exportCSV()">전체 CSV</button><button onclick="printReport()">전체 인쇄·PDF</button><button onclick="shareReport()">전체 보고서 공유</button></div>`;
+  h+=deadlineCard();
   if(!w)h+=`<div class="card warn">설정에서 통상시급을 입력하면 금액 추정이 표시됩니다.</div>`;
   if(!ms.length)h+='<div class="card mut">기록이 없습니다.</div>';
   for(const m of ms){
@@ -271,6 +289,7 @@ function month(){
     h+=`<div class=card><h3 style="margin:0 0 8px">${ymLabel(m.ym)} <small class=mut>${m.recs.length}건 (당일 ${m.live} · 복원 ${m.rest})</small></h3>
 <div class=kv><span>초과 합계</span><b>${fmtMin(m.ot)}</b></div>
 <div class=kv><span>야간(22~06시) 겹침</span><b>${fmtMin(m.night)}</b></div>
+<div class=kv><span>휴게·식사 못 쓴 날</span><b>${m.noBreak}일</b></div>
 <div class=kv><span>법정 수당 추정</span><b>${w?wonF(e.est):'-'}</b></div>
 <label>급여명세서의 시간외수당(원)</label><input type=number inputmode=numeric placeholder="그 달 실제로 받은 금액" value="${S.pay[m.ym]??''}" onchange="setPay('${m.ym}',this.value)">
 <div class=kv style="margin-top:6px"><span>미지급 추정</span><b class="${e.unpaid>0?'warn':''}">${w?(e.unpaid>0?wonF(e.unpaid):'없음 (받은 금액 ≥ 추정액)'):'-'}</b></div>
@@ -279,12 +298,22 @@ function month(){
   }
   return h;
 }
+function deadlineCard(){
+  const s=S.settings,ms=monthly();if(!ms.length&&!s.resignDate)return'';
+  let h='<div class=card><h3 style="margin-top:0">시효 안내</h3>';
+  if(ms.length){const o=ms[ms.length-1];h+=`<div class=kv><span>가장 먼저 사라지는 달</span><span><b>${ymLabel(o.ym)}</b> → ${expiry(o.ym).toLocaleDateString('ko-KR')}</span></div>`;}
+  if(s.resignDate)h+=`<div class=kv><span>퇴사일</span><b>${s.resignDate}</b></div><div class=mut style="margin:6px 0">퇴사 후에도 달마다 급여일+3년이 지나면 그 달분은 사라집니다. 퇴사하면 바로 내용증명(청구서)을 보내고, 보낸 날부터 6개월 안에 지급명령·소송을 내야 시효 중단이 유지됩니다.</div>`;
+  if(s.noticeDate){const [y,m,d]=parts(s.noticeDate);const dl=new Date(y,m+5,d);const days=Math.ceil((dl-Date.now())/864e5);h+=`<div class=kv><span>내용증명 발송</span><b>${s.noticeDate}</b></div><div class=kv><span>소송·지급명령 마감 <span class=mut>(발송 + 6개월)</span></span><span><b>${dl.toLocaleDateString('ko-KR')}</b> ${days<0?'<span class="badge red">지남</span>':days<=30?`<span class="badge org">D-${days} 임박</span>`:`<span class=badge>D-${days}</span>`}</span></div>`;}
+  else if(s.resignDate)h+=`<div class=mut>내용증명을 보냈으면 설정에 발송일을 넣으세요. 6개월 마감일을 계산합니다.</div>`;
+  return h+'</div>';
+}
 function settings(){
   const s=S.settings;
   return banner()+`<div class=card><h3 style="margin-top:0">계산</h3>
 <label>통상시급(원) <span class=mut>— 급여명세서 기준. 정확한 값은 노무사 확인</span></label><input type=number inputmode=numeric value="${s.wage||''}" placeholder="예: 15000" onchange="setS('wage',+this.value||0)">
 <div class=grid2><div><label>급여일 (매월)</label><input type=number inputmode=numeric min=1 max=31 value="${s.payday}" onchange="setS('payday',Math.min(31,Math.max(1,+this.value||25)))"></div><div><label>지급 기준</label><select onchange="setS('payMonth',this.value)"><option value=same ${s.payMonth==='same'?'selected':''}>당월분 당월 지급</option><option value=next ${s.payMonth==='next'?'selected':''}>당월분 익월 지급</option></select></div></div>
-<div class=mut style="margin-top:8px">시효 만료일 = 그 달 급여일 + 3년. 달마다 따로 사라집니다.</div></div>
+<div class=mut style="margin-top:8px">시효 만료일 = 그 달 급여일 + 3년. 달마다 따로 사라집니다.</div>
+<div class=grid2><div><label>퇴사일 <span class=mut>(정해지면)</span></label><input type=date value="${s.resignDate||''}" onchange="setS('resignDate',this.value)"></div><div><label>내용증명 발송일</label><input type=date value="${s.noticeDate||''}" onchange="setS('noticeDate',this.value)"></div></div></div>
 <div class=card><h3 style="margin-top:0">근무조 정규 시각</h3>${['D','E','N'].map(k=>`<div class=grid2><div><label>${SHIFT[k]} 시작</label><input type=time value="${s.shifts[k][0]}" onchange="setShift('${k}',0,this.value)"></div><div><label>종료</label><input type=time value="${s.shifts[k][1]}" onchange="setShift('${k}',1,this.value)"></div></div>`).join('')}
 <label>사유 목록 <span class=mut>(쉼표로 구분)</span></label><input value="${esc(s.reasons.join(', '))}" onchange="setS('reasons',this.value.split(',').map(x=>x.trim()).filter(Boolean))"></div>
 <div class=card><h3 style="margin-top:0">백업</h3><p class=mut style="margin-top:0">데이터는 이 폰 안에만 있습니다. 가끔 백업 파일을 iCloud Drive나 구글 드라이브에 저장하세요. 병원 PC·병원 계정에는 두지 마세요.</p>
